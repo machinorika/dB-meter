@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dB メーター — 音の大きさを測ろう</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', sans-serif;
+      background: #f5f4f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    #app {
+      background: #ffffff;
+      border-radius: 16px;
+      padding: 2rem 1.5rem;
+      max-width: 400px;
+      width: 100%;
+      box-shadow: 0 2px 16px rgba(0,0,0,0.08);
+    }
+    h1 { font-size: 20px; font-weight: 600; color: #1a1a1a; margin-bottom: 4px; }
+    .sub { font-size: 13px; color: #888; margin-bottom: 1.5rem; }
+    #db-display { text-align: center; margin: 1rem 0; }
+    #db-value { font-size: 80px; font-weight: 600; color: #1a1a1a; line-height: 1; transition: color 0.2s; }
+    #db-unit { font-size: 18px; color: #aaa; margin-top: 4px; }
+    #bar-wrap { background: #efefef; border-radius: 8px; height: 20px; overflow: hidden; margin: 1rem 0; }
+    #bar { height: 100%; width: 0%; border-radius: 8px; transition: width 0.08s, background 0.2s; background: #1D9E75; }
+    #scale { display: flex; justify-content: space-between; font-size: 11px; color: #bbb; margin-bottom: 1.5rem; }
+    #level-label { text-align: center; font-size: 14px; font-weight: 500; height: 22px; margin-bottom: 1.5rem; transition: color 0.2s; color: #1D9E75; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 1.5rem; }
+    .stat { background: #f5f4f0; border-radius: 8px; padding: 10px; text-align: center; }
+    .stat-label { font-size: 11px; color: #999; margin-bottom: 4px; }
+    .stat-val { font-size: 18px; font-weight: 600; color: #1a1a1a; }
+    #start-btn {
+      display: block; width: 100%; padding: 14px;
+      border-radius: 10px; border: 1.5px solid #ddd;
+      background: #fff; font-size: 15px; font-weight: 500;
+      cursor: pointer; color: #1a1a1a;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    #start-btn:hover { background: #f5f4f0; }
+    #start-btn.active { background: #fff5f3; color: #c0392b; border-color: #e87060; }
+    #msg { font-size: 12px; color: #aaa; text-align: center; margin-top: 10px; min-height: 18px; }
+    #history { margin-bottom: 1rem; }
+    #history-title { font-size: 12px; font-weight: 500; color: #bbb; margin-bottom: 8px; letter-spacing: 0.05em; text-transform: uppercase; }
+    .history-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .history-bar-wrap { flex: 1; background: #efefef; border-radius: 4px; height: 8px; overflow: hidden; }
+    .history-bar { height: 100%; border-radius: 4px; }
+    footer { text-align: center; font-size: 11px; color: #ccc; margin-top: 1.5rem; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #1a1a1a; }
+      #app { background: #242424; box-shadow: 0 2px 16px rgba(0,0,0,0.4); }
+      h1 { color: #f0f0f0; }
+      #db-value { color: #f0f0f0; }
+      .stat { background: #2e2e2e; }
+      .stat-val { color: #f0f0f0; }
+      #bar-wrap { background: #333; }
+      .history-bar-wrap { background: #333; }
+      #start-btn { background: #2e2e2e; color: #f0f0f0; border-color: #444; }
+      #start-btn:hover { background: #363636; }
+      #start-btn.active { background: #3a1f1c; color: #e87060; border-color: #c0392b; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <h1>dB メーター</h1>
+  <p class="sub">スマートフォンのマイクで音の大きさを測定します</p>
+ 
+  <div id="db-display">
+    <div id="db-value">--</div>
+    <div id="db-unit">dB</div>
+  </div>
+ 
+  <div id="bar-wrap"><div id="bar"></div></div>
+  <div id="scale">
+    <span>0</span><span>20</span><span>40</span><span>60</span><span>80</span><span>100+</span>
+  </div>
+ 
+  <div id="level-label">計測開始ボタンを押してください</div>
+ 
+  <div class="stats">
+    <div class="stat"><div class="stat-label">最小</div><div class="stat-val" id="min-val">--</div></div>
+    <div class="stat"><div class="stat-label">平均</div><div class="stat-val" id="avg-val">--</div></div>
+    <div class="stat"><div class="stat-label">最大</div><div class="stat-val" id="max-val">--</div></div>
+  </div>
+ 
+  <div id="history">
+    <div id="history-title">直近の記録</div>
+    <div id="history-list"></div>
+  </div>
+ 
+  <button id="start-btn">計測を開始する</button>
+  <div id="msg"></div>
+ 
+  <footer>Web Audio API を使用しています</footer>
+</div>
+ 
+<script>
+let audioCtx, analyser, source, stream, raf;
+let running = false;
+let minDb = Infinity, maxDb = -Infinity, sumDb = 0, countDb = 0;
+let history = [];
+ 
+const btn = document.getElementById('start-btn');
+const dbVal = document.getElementById('db-value');
+const bar = document.getElementById('bar');
+const label = document.getElementById('level-label');
+const minEl = document.getElementById('min-val');
+const maxEl = document.getElementById('max-val');
+const avgEl = document.getElementById('avg-val');
+const msg = document.getElementById('msg');
+const histList = document.getElementById('history-list');
+ 
+const LEVELS = [
+  { max: 30,  text: '静寂 — 図書館レベル',    color: '#1D9E75' },
+  { max: 50,  text: '静か — 住宅地の夜',       color: '#1D9E75' },
+  { max: 65,  text: '普通の会話レベル',         color: '#EF9F27' },
+  { max: 80,  text: 'にぎやか — 交通騒音',     color: '#EF9F27' },
+  { max: 90,  text: 'うるさい — 工場内',       color: '#D85A30' },
+  { max: 200, text: '非常に騒がしい — 危険域', color: '#E24B4A' },
+];
+ 
+function getLevel(db) {
+  return LEVELS.find(l => db <= l.max) || LEVELS[LEVELS.length - 1];
+}
+ 
+function updateHistory(db) {
+  const now = new Date();
+  const t = now.getHours().toString().padStart(2,'0') + ':' +
+            now.getMinutes().toString().padStart(2,'0') + ':' +
+            now.getSeconds().toString().padStart(2,'0');
+  history.unshift({ db, t });
+  if (history.length > 5) history.pop();
+  histList.innerHTML = history.map(h => {
+    const pct = Math.min(100, h.db);
+    const lv = getLevel(h.db);
+    return `<div class="history-row">
+      <span style="min-width:44px;color:#bbb;font-size:11px;">${h.t}</span>
+      <div class="history-bar-wrap"><div class="history-bar" style="width:${pct}%;background:${lv.color}"></div></div>
+      <span style="min-width:38px;text-align:right;font-size:12px;color:#888;">${h.db} dB</span>
+    </div>`;
+  }).join('');
+}
+ 
+let lastRecordTime = 0;
+ 
+function loop() {
+  const buf = new Uint8Array(analyser.fftSize);
+  analyser.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const v = (buf[i] - 128) / 128;
+    sum += v * v;
+  }
+  const rms = Math.sqrt(sum / buf.length);
+  let db = rms > 0 ? Math.round(20 * Math.log10(rms) + 90) : 0;
+  db = Math.max(0, Math.min(110, db));
+ 
+  dbVal.textContent = db;
+  const pct = Math.min(100, db);
+  bar.style.width = pct + '%';
+ 
+  const lv = getLevel(db);
+  bar.style.background = lv.color;
+  dbVal.style.color = lv.color;
+  label.style.color = lv.color;
+  label.textContent = lv.text;
+ 
+  if (db > 0) {
+    if (db < minDb) minDb = db;
+    if (db > maxDb) maxDb = db;
+    sumDb += db; countDb++;
+    minEl.textContent = minDb;
+    maxEl.textContent = maxDb;
+    avgEl.textContent = Math.round(sumDb / countDb);
+ 
+    const now = Date.now();
+    if (now - lastRecordTime > 3000) {
+      updateHistory(db);
+      lastRecordTime = now;
+    }
+  }
+ 
+  raf = requestAnimationFrame(loop);
+}
+ 
+async function start() {
+  try {
+    msg.textContent = 'マイクへのアクセスを許可してください...';
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 2048;
+    source = audioCtx.createMediaStreamSource(stream);
+    source.connect(analyser);
+    running = true;
+    btn.textContent = '計測を停止する';
+    btn.classList.add('active');
+    msg.textContent = 'マイク使用中 — 音を立ててみてください';
+    minDb = Infinity; maxDb = -Infinity; sumDb = 0; countDb = 0;
+    lastRecordTime = 0;
+    loop();
+  } catch(e) {
+    msg.textContent = 'マイクへのアクセスが拒否されました。ブラウザの設定を確認してください。';
+  }
+}
+ 
+function stop() {
+  running = false;
+  cancelAnimationFrame(raf);
+  if (source) source.disconnect();
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  if (audioCtx) audioCtx.close();
+  btn.textContent = '計測を再開する';
+  btn.classList.remove('active');
+  label.textContent = '停止中';
+  label.style.color = '#aaa';
+  bar.style.width = '0%';
+  dbVal.textContent = '--';
+  dbVal.style.color = '#1a1a1a';
+  msg.textContent = '';
+}
+ 
+btn.addEventListener('click', () => {
+  if (!running) start(); else stop();
+});
+</script>
+</body>
+</html>
+ 
